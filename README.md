@@ -113,8 +113,10 @@ tool\build_setup.ps1
 
 Порядок выпуска:
 
-1. поднять версию в `pubspec.yaml` (`version: 1.1.1+3`), `installer/Setup.cs`
-   (`Const.Version`, `AssemblyVersion`) и `tool/build_setup.ps1` (`$version`);
+1. поднять версию в `pubspec.yaml` (`version: 1.1.2+4` — номер сборки после `+`
+   должен расти, иначе Android не увидит обновление), `installer/Setup.cs`
+   (`Const.Version`, `AssemblyVersion`), `installer/Uninstall.cs` и
+   `tool/build_setup.ps1` (`$version`);
 2. собрать APK и установщик (команды выше) и скопировать их в `build\dist\`;
 3. опубликовать релиз:
 
@@ -129,6 +131,11 @@ tool\release.ps1 -Version 1.1.1
 
 Сравнение версий — числовое (`lib/core/version_compare.dart`), суффикс сборки
 `+N` и предрелизные хвосты не влияют на решение.
+
+На Windows установщик обновляет копию в `%LOCALAPPDATA%\Programs\ScaleGuard`
+без прав администратора и сам запускает новую версию. На Android открывается
+системный установщик: в первый раз нужно разрешить ScaleGuard установку
+приложений, дальше обновление ставится в два касания.
 
 ---
 
