@@ -9,6 +9,7 @@ import 'package:path_provider/path_provider.dart';
 
 import '../config/app_config.dart';
 import '../core/version_compare.dart';
+import '../core/windows_shell.dart';
 import '../widgets/update_dialog.dart';
 
 /// One release published on GitHub.
@@ -291,6 +292,12 @@ class UpdateService {
   /// shows that explanation.
   Future<void> install(File file) async {
     if (Platform.isWindows) {
+      // The runner puts every child into a job object that is killed when this
+      // process exits, which is what keeps the VPN core from outliving the
+      // window. An updater is the one child that must survive that exit: without
+      // this the setup is terminated before it can read its own payload, which
+      // looks exactly like "the update downloaded and then nothing happened".
+      await WindowsShell.setChildrenMayOutliveUs(true);
       await Process.start(
         file.path,
         const ['--update'],
