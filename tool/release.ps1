@@ -5,8 +5,15 @@
 #
 # The updater in the app reads /releases/latest, so the release must be
 # published (not draft) and must contain the two assets it looks for:
-#   ScaleGuard-Setup-<version>.exe   (Windows)
+#   ScaleGuard-Setup-<version>.exe   (Windows, versioned copy)
 #   ScaleGuard-android.apk           (Android)
+#
+# The Windows installer is also uploaded under the stable name
+# `ScaleGuard-Setup.exe`. The website links to
+# /releases/latest/download/ScaleGuard-Setup.exe and
+# /releases/latest/download/ScaleGuard-android.apk, so both download buttons
+# start serving the new build as soon as the release is published - without a
+# website redeploy.
 #
 # Existing assets with the same names are replaced, which makes the script safe
 # to re-run after a rebuild.
@@ -72,8 +79,9 @@ if ($null -eq $release) {
 }
 
 # Replace stale assets with the same names.
+$assetNames = @('ScaleGuard-android.apk', 'ScaleGuard-Setup.exe', "ScaleGuard-Setup-$Version.exe")
 foreach ($asset in @($release.assets)) {
-    if ($asset.name -eq 'ScaleGuard-android.apk' -or $asset.name -eq "ScaleGuard-Setup-$Version.exe") {
+    if ($assetNames -contains $asset.name) {
         try {
             Invoke-GitHub 'DELETE' "https://api.github.com/repos/$Repo/releases/assets/$($asset.id)" $null | Out-Null
             Write-Host "[release] removed old asset $($asset.name)"
@@ -91,9 +99,13 @@ function Upload-Asset($path, $name, $label) {
 }
 
 Upload-Asset $setup "ScaleGuard-Setup-$Version.exe" 'Windows installer'
+# Stable name for the website: /releases/latest/download/ScaleGuard-Setup.exe
+Upload-Asset $setup 'ScaleGuard-Setup.exe' 'Windows installer (latest)'
 Upload-Asset $apk 'ScaleGuard-android.apk' 'Android APK'
 
 $latest = Invoke-GitHub 'GET' "https://api.github.com/repos/$Repo/releases/latest" $null
 Write-Host ''
 Write-Host "[release] latest is now $($latest.tag_name)"
 Write-Host "[release] page: https://github.com/$Repo/releases/tag/$tag"
+Write-Host "[release] website Windows: https://github.com/$Repo/releases/latest/download/ScaleGuard-Setup.exe"
+Write-Host "[release] website Android: https://github.com/$Repo/releases/latest/download/ScaleGuard-android.apk"

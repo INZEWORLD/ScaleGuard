@@ -106,10 +106,14 @@ tool\build_setup.ps1
 Чтобы выпустить обновление, достаточно опубликовать релиз с новым тегом и
 двумя вложениями:
 
-| Платформа | Имя файла в релизе |
-|-----------|--------------------|
-| Windows | `ScaleGuard-Setup-<версия>.exe` |
-| Android | `ScaleGuard-android.apk` |
+| Платформа | Имя файла в релизе | Постоянная ссылка для сайта |
+|-----------|--------------------|-----------------------------|
+| Windows | `ScaleGuard-Setup-<версия>.exe` + `ScaleGuard-Setup.exe` | `/releases/latest/download/ScaleGuard-Setup.exe` |
+| Android | `ScaleGuard-android.apk` | `/releases/latest/download/ScaleGuard-android.apk` |
+
+`ScaleGuard-Setup.exe` — копия установщика под стабильным именем. Сайт ссылается
+именно на неё, поэтому кнопки «Скачать» на `scaleguard.inzeworld.com` начинают
+отдавать новую версию сразу после публикации релиза, без пересборки сайта.
 
 Порядок выпуска:
 
