@@ -1,0 +1,24 @@
+name: flutter_secure_storage
+description: >-
+  ScaleGuard's dependency-substituted stand-in for flutter_secure_storage. The
+  upstream Windows implementation is C++ and requires the ATL headers from an
+  optional Visual Studio workload. This package offers the same Dart API and
+  keeps secrets protected without any extra build requirement: on Windows it
+  uses the Windows Credential Manager through dart:ffi, elsewhere it stores
+  values in a file readable only by the current user.
+version: 11.2.0
+publish_to: 'none'
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  win32: ^6.0.1
+  # Android and iOS have no `APPDATA`, so the file vault asks the platform for
+  # the application's own private directory instead of guessing one.
+  path_provider: ^2.1.5
+
+# No `flutter.plugin` section: with no platform implementations declared, the
+# Flutter tool compiles no native code for this package on any platform.

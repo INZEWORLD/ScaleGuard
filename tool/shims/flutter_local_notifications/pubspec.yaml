@@ -1,0 +1,22 @@
+name: flutter_local_notifications
+description: >-
+  ScaleGuard's dependency-substituted stand-in for flutter_local_notifications.
+  The upstream package's Windows implementation is written in C++ and requires
+  the ATL headers from an optional Visual Studio workload. This shim exposes the
+  same Dart API surface the application uses and performs no native calls at
+  all, so a Windows build needs nothing beyond the standard C++ toolchain.
+  Android and iOS keep their behaviour because the application routes real
+  reminders through `lib/services/notification_backend_mobile.dart`.
+version: 19.0.0
+publish_to: 'none'
+
+environment:
+  sdk: ^3.13.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+# No `flutter.plugin` section is declared on purpose: without it the Flutter
+# tool registers no native plugin, so no platform code is compiled for this
+# package on any platform.

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- The updater downloads into the app cache, so the FileProvider only has
+         to expose that one directory. Nothing else on the device is shared. -->
+    <cache-path name="updates" path="updates/" />
+</paths>

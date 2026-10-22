@@ -1,0 +1,39 @@
+ScaleGuard VPN core (mihomo.exe, "scaleguard-core")
+==================================================
+
+This directory contains a build of the mihomo (Clash.Meta) network core, used by
+the ScaleGuard client on Windows.
+
+  Upstream project : https://github.com/MetaCubeX/mihomo
+  Version          : 1.19.32
+  License          : GNU General Public License v3.0 (GPL-3.0)
+  License text     : see MIHOMO_LICENSE in the repository (android/MIHOMO_LICENSE)
+  Corresponding source: https://github.com/MetaCubeX/mihomo/tree/v1.19.32
+
+How ScaleGuard uses it
+----------------------
+
+The core is **not linked into the application**. It is distributed as a separate
+executable that ScaleGuard starts as a child process and controls exclusively over
+its RESTful controller on the loopback interface. The Windows application itself
+therefore contains no mihomo code and is not a derivative work of it.
+
+The only ScaleGuard-authored code inside this binary is a launcher
+(`build-tools/mihomo-build/main.go`, Apache-2.0 like the rest of the client) whose
+sole job is to call the upstream `hub.Parse` entry point with the generated
+profile, the controller address and the controller secret.
+
+Because the binary is a redistribution of GPL-3.0 software, the following
+obligations apply to anyone shipping it:
+
+  1. Keep this notice and the full GPL-3.0 text together with the binary.
+  2. Provide the complete corresponding source of the exact build. The upstream
+     tag above plus the launcher in `build-tools/mihomo-build/` is that source;
+     rebuild with the command in `docs/windows.md` to reproduce this binary.
+  3. Do not add licence restrictions of your own on top of the GPL for this
+     binary.
+
+If you prefer not to redistribute a GPL-3.0 binary at all, delete
+`windows/runner/mihomo.exe` and point the engine at a core the user installs
+themselves; `WindowsVpnEngine._resolveCorePath` already searches for it next to
+the executable.
