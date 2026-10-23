@@ -36,15 +36,42 @@ class UpdatePermissionRequired implements Exception {
   const UpdatePermissionRequired();
 }
 
+/// What happened when the Android download service was started.
+class AndroidUpdateStart {
+  const AndroidUpdateStart({required this.permissionRequested});
+
+  final bool permissionRequested;
+}
+
+/// Live state of the Android background download.
+class AndroidUpdateStatus {
+  const AndroidUpdateStatus({
+    required this.state,
+    required this.progress,
+    required this.path,
+    required this.error,
+    required this.hasInstallPermission,
+  });
+
+  final String state;
+  final double? progress;
+  final String? path;
+  final String? error;
+  final bool hasInstallPermission;
+
+  bool get isDownloading => state == 'downloading';
+  bool get isDone => state == 'done';
+  bool get isFailed => state == 'failed';
+}
+
 /// The self-updater: GitHub Releases is the source of truth.
 ///
 /// The repository layout the updater expects is deliberately the one a release
 /// already has:
-///   * `ScaleGuard-Setup-<version>.exe` — the Windows installer;
-///   * `ScaleGuard-android.apk` — the Android package.
-/// A release tagged `v1.2.3` and marked *Latest* is offered to every build older
-/// than 1.2.3, which is exactly how clients built before this service existed
-/// can still be upgraded by hand from the same page.
+///   * `ScaleGuard-Setup-<version>.exe` - the Windows installer;
+///   * `ScaleGuard-android-<version>.apk` - the Android package.
+/// Each platform compares its own file's version, so an Android-only release
+/// can keep the previous Windows installer without offering it again.
 class UpdateService {
   UpdateService._();
 
@@ -265,7 +292,67 @@ class UpdateService {
     );
   }
 
+  /// Starts the native Android download service.
+  ///
+  /// The service owns the transfer so it survives the jump to the "install
+  /// unknown apps" settings screen. It also opens permission settings when
+  /// needed; the caller only has to keep polling [androidDownloadStatus].
+  Future<AndroidUpdateStart> startAndroidDownload(UpdateInfo info) async {
+    if (!Platform.isAndroid) {
+      throw UnsupportedError('Фоновая загрузка доступна только на Android.');
+    }
+    final result = await _androidChannel.invokeMapMethod<String, dynamic>(
+      'startDownload',
+      {
+        'url': info.assetUrl,
+        'fileName': info.assetName,
+        'version': info.version,
+        'size': info.assetSize,
+      },
+    );
+    return AndroidUpdateStart(
+      permissionRequested: result?['permission'] == true,
+    );
+  }
+
+  Future<AndroidUpdateStatus> androidDownloadStatus() async {
+    if (!Platform.isAndroid) {
+      throw UnsupportedError('Статус загрузки доступен только на Android.');
+    }
+    final result = await _androidChannel.invokeMapMethod<String, dynamic>(
+      'downloadStatus',
+    );
+    final rawProgress = (result?['progress'] as num?)?.toDouble();
+    return AndroidUpdateStatus(
+      state: (result?['state'] ?? 'idle').toString(),
+      progress: rawProgress == null
+          ? null
+          : (rawProgress / 100).clamp(0.0, 1.0).toDouble(),
+      path: result?['path']?.toString(),
+      error: result?['error']?.toString(),
+      hasInstallPermission: result?['permission'] == true,
+    );
+  }
+
+  /// Opens the package installer for the APK the native service downloaded.
+  ///
+  /// Returns `permission` when Android still needs the user to allow installs;
+  /// the native side has already opened that settings page.
+  Future<String> installAndroidDownload() async {
+    if (!Platform.isAndroid) {
+      throw UnsupportedError('Установка доступна только на Android.');
+    }
+    final result = await _androidChannel.invokeMethod<String>(
+      'installDownloaded',
+    );
+    return result ?? 'started';
+  }
+
   /// Downloads the release asset and returns the file on disk.
+  ///
+  /// This synchronous-in-the-foreground path is kept for Windows and for tests;
+  /// Android uses [startAndroidDownload] so an update keeps downloading when the
+  /// activity goes away.
   Future<File> download(
     UpdateInfo info, {
     void Function(int received, int total)? onProgress,

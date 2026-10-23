@@ -4,6 +4,9 @@
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <!-- The updater keeps downloading the APK after the activity is replaced by
+         the "install unknown apps" settings screen. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- The battery optimiser freezes the tunnel's threads once the screen has
          been off for a while; this is the exemption the user grants for it. -->
@@ -85,6 +88,20 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+
+        <!-- Keeps the APK download alive while the user grants "install unknown
+             apps" or simply leaves the app. -->
+        <service
+            android:name=".UpdateDownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- Invisible trampoline used by the completed-update notification. -->
+        <activity
+            android:name=".UpdateInstallActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@style/UpdateInstallTheme" />
 
         <!-- Shares the downloaded APK with the system package installer. The
              authority is derived from applicationId so a debug build and a

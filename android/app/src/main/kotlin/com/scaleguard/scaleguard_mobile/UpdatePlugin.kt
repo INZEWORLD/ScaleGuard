@@ -12,14 +12,12 @@ import io.flutter.plugin.common.MethodChannel
 import java.io.File
 
 /**
- * Hands a downloaded APK to Android's package installer.
+ * Dart bridge for the Android updater.
  *
- * The file lives in the application cache, so it is shared through a FileProvider
- * with a one-shot read grant; no external-storage permission is involved. On
- * Android 8+ the package installer itself requires the "install unknown apps"
- * permission, which belongs to ScaleGuard rather than to the installer, so the
- * first update opens that settings page and reports [RESULT_PERMISSION] back to
- * Dart instead of failing silently.
+ * The actual transfer lives in [UpdateDownloadService], because it has to keep
+ * running after the Flutter activity is replaced by the "install unknown apps"
+ * settings screen. This plugin only starts that service, reports its progress
+ * to the open dialog and opens the package installer when the APK is ready.
  */
 class UpdatePlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
     companion object {
@@ -45,38 +43,105 @@ class UpdatePlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
     }
 
     override fun onMethodCall(call: MethodCall, result: MethodChannel.Result) {
-        if (call.method != "installApk") {
-            result.notImplemented()
+        val context = appContext
+        if (context == null) {
+            result.error("no_context", "Updater is not attached", null)
             return
         }
-        val path = call.argument<String>("path")
-        val context = appContext
-        if (context == null || path.isNullOrEmpty()) {
-            result.error("bad_args", "APK path is missing", null)
+        when (call.method) {
+            "startDownload" -> startDownload(context, call, result)
+            "downloadStatus" -> result.success(UpdateDownloadService.snapshot(context))
+            "installDownloaded" -> installDownloaded(context, result)
+            "installApk" -> installApk(context, call, result)
+            else -> result.notImplemented()
+        }
+    }
+
+    private fun startDownload(
+        context: Context,
+        call: MethodCall,
+        result: MethodChannel.Result,
+    ) {
+        val url = call.argument<String>("url")
+        val fileName = call.argument<String>("fileName")
+        val version = call.argument<String>("version").orEmpty()
+        val size = call.argument<Number>("size")?.toLong() ?: 0L
+        if (url.isNullOrEmpty() || fileName.isNullOrEmpty()) {
+            result.error("bad_args", "Update URL or file name is missing", null)
             return
         }
         try {
-            val file = File(path)
-            if (!file.exists() || file.length() == 0L) {
-                result.error("missing_apk", "Downloaded APK is missing", null)
-                return
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
-                !context.packageManager.canRequestPackageInstalls()
-            ) {
-                val settings = Intent(
-                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
-                    Uri.parse("package:${context.packageName}")
-                )
-                settings.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                context.startActivity(settings)
-                result.success(RESULT_PERMISSION)
-                return
-            }
+            UpdateDownloadService.start(
+                context,
+                url,
+                fileName,
+                version,
+                size,
+            )
+            // Start the transfer first and open the permission screen straight
+            // away. By the time the user returns, a large APK is already on its
+            // way instead of waiting for another button press.
+            val needsPermission = !UpdateDownloadService.hasInstallPermission(context)
+            if (needsPermission) openPermissionSettings(context)
+            result.success(
+                mapOf(
+                    "started" to true,
+                    "permission" to needsPermission,
+                ),
+            )
+        } catch (error: Exception) {
+            result.error(
+                "download_start_failed",
+                error.message ?: "Cannot start update download",
+                null,
+            )
+        }
+    }
+
+    private fun installDownloaded(context: Context, result: MethodChannel.Result) {
+        val file = UpdateDownloadService.downloadedApk(context)
+        if (file == null) {
+            result.error("missing_apk", "Downloaded APK is missing", null)
+            return
+        }
+        if (!UpdateDownloadService.hasInstallPermission(context)) {
+            openPermissionSettings(context)
+            result.success(RESULT_PERMISSION)
+            return
+        }
+        startInstallActivity(context, file)
+        result.success(RESULT_STARTED)
+    }
+
+    /**
+     * Compatibility path for builds that hand us an APK directly instead of
+     * going through [UpdateDownloadService].
+     */
+    private fun installApk(
+        context: Context,
+        call: MethodCall,
+        result: MethodChannel.Result,
+    ) {
+        val path = call.argument<String>("path")
+        if (path.isNullOrEmpty()) {
+            result.error("bad_args", "APK path is missing", null)
+            return
+        }
+        val file = File(path)
+        if (!file.exists() || file.length() == 0L) {
+            result.error("missing_apk", "Downloaded APK is missing", null)
+            return
+        }
+        if (!UpdateDownloadService.hasInstallPermission(context)) {
+            openPermissionSettings(context)
+            result.success(RESULT_PERMISSION)
+            return
+        }
+        try {
             val uri = FileProvider.getUriForFile(
                 context,
                 "${context.packageName}.updates",
-                file
+                file,
             )
             val intent = Intent(Intent.ACTION_VIEW).apply {
                 setDataAndType(uri, "application/vnd.android.package-archive")
@@ -86,7 +151,26 @@ class UpdatePlugin : FlutterPlugin, MethodChannel.MethodCallHandler {
             context.startActivity(intent)
             result.success(RESULT_STARTED)
         } catch (error: Exception) {
-            result.error("install_failed", error.message ?: "Cannot open installer", null)
+            result.error(
+                "install_failed",
+                error.message ?: "Cannot open installer",
+                null,
+            )
         }
+    }
+
+    private fun startInstallActivity(context: Context, file: File) {
+        context.startActivity(
+            UpdateInstallActivity.intent(context, file.absolutePath)
+        )
+    }
+
+    private fun openPermissionSettings(context: Context) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val settings = Intent(
+            Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+            Uri.parse("package:${context.packageName}"),
+        ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { context.startActivity(settings) }
     }
 }
