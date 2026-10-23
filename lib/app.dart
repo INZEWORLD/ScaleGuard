@@ -31,7 +31,8 @@ class ScaleGuardApp extends StatefulWidget {
   State<ScaleGuardApp> createState() => _ScaleGuardAppState();
 }
 
-class _ScaleGuardAppState extends State<ScaleGuardApp> with WidgetsBindingObserver {
+class _ScaleGuardAppState extends State<ScaleGuardApp>
+    with WidgetsBindingObserver {
   final _appLinks = AppLinks();
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   StreamSubscription<String>? _forwardedLinks;
@@ -47,7 +48,13 @@ class _ScaleGuardAppState extends State<ScaleGuardApp> with WidgetsBindingObserv
     super.initState();
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) => _init());
-    Future<void>.delayed(const Duration(milliseconds: 1400), () {
+    // Android recreates the activity when the system reclaims the UI process;
+    // the VPN itself keeps running in its foreground service. Keep the branded
+    // splash on a cold launch, but do not replay it for that warm return.
+    final splashDelay = Platform.isAndroid || Platform.isIOS
+        ? const Duration(milliseconds: 450)
+        : const Duration(milliseconds: 1400);
+    Future<void>.delayed(splashDelay, () {
       if (mounted) setState(() => _minSplashElapsed = true);
     });
     _appLinks.uriLinkStream.listen((uri) {
@@ -126,7 +133,10 @@ class _ScaleGuardAppState extends State<ScaleGuardApp> with WidgetsBindingObserv
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    final showSplash = !_linksReady || !_minSplashElapsed || state.bootstrapping;
+    final showSplash =
+        !_linksReady ||
+        state.bootstrapping ||
+        (!state.restoredCachedSession && !_minSplashElapsed);
 
     // The native caption has to know which flavour of the window it belongs to.
     final dark = switch (state.themeMode) {

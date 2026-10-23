@@ -133,18 +133,25 @@ class UpdateService {
       if (body is! Map) return null;
       final tag = (body['tag_name'] ?? '').toString();
       if (tag.isEmpty) return null;
-      final version = tag.replaceFirst(RegExp(r'^[vV]'), '');
+      final releaseVersion = tag.replaceFirst(RegExp(r'^[vV]'), '');
+      // The platform's asset carries its own version. A release can update
+      // Android only and keep the previous Windows installer; comparing the
+      // release tag alone would offer Windows an update that re-installs the
+      // older build.
+      final asset = _pickAsset(body['assets'], releaseVersion);
+      if (asset == null) {
+        if (manual) {
+          _notice(
+            'Обновление $releaseVersion есть, но файл для этой платформы ещё не загружен.',
+          );
+        }
+        return null;
+      }
+      final version = asset.version;
       if (!isNewerVersion(version, _currentVersion)) {
         _lastCheck = DateTime.now();
         if (manual) {
           _notice('У вас последняя версия ScaleGuard ($_currentVersion).');
-        }
-        return null;
-      }
-      final asset = _pickAsset(body['assets']);
-      if (asset == null) {
-        if (manual) {
-          _notice('Обновление $version есть, но файл для этой платформы ещё не загружен.');
         }
         return null;
       }
@@ -165,7 +172,9 @@ class UpdateService {
       // GitHub is rate-limiting or the release is not published yet. Manual
       // checks say so; automatic ones stay silent.
       if (manual) {
-        _notice('Не удалось проверить обновления. Проверьте подключение к интернету.');
+        _notice(
+          'Не удалось проверить обновления. Проверьте подключение к интернету.',
+        );
       }
       debugPrint('update check failed: $error');
       return null;
@@ -195,7 +204,7 @@ class UpdateService {
     }
   }
 
-  _Asset? _pickAsset(dynamic raw) {
+  _Asset? _pickAsset(dynamic raw, String releaseVersion) {
     if (raw is! List) return null;
     final assets = <_Asset>[];
     for (final item in raw) {
@@ -204,7 +213,9 @@ class UpdateService {
       final url = (item['browser_download_url'] ?? '').toString();
       final size = (item['size'] as num?)?.toInt() ?? 0;
       if (name.isEmpty || url.isEmpty) continue;
-      assets.add(_Asset(name, url, size));
+      assets.add(
+        _Asset(name, url, size, _versionFromAssetName(name) ?? releaseVersion),
+      );
     }
     bool Function(_Asset) matches;
     if (Platform.isWindows) {
@@ -216,10 +227,21 @@ class UpdateService {
     } else {
       return null;
     }
+    _Asset? best;
     for (final asset in assets) {
-      if (matches(asset)) return asset;
+      if (!matches(asset)) continue;
+      if (best == null || compareVersions(asset.version, best.version) > 0) {
+        best = asset;
+      }
     }
-    return null;
+    return best;
+  }
+
+  /// `ScaleGuard-Setup-1.1.2.exe` -> `1.1.2`; stable names have no version.
+  String? _versionFromAssetName(String name) {
+    final matches = RegExp(r'\d+(?:\.\d+){1,3}').allMatches(name);
+    if (matches.isEmpty) return null;
+    return matches.last.group(0);
   }
 
   void _offer(UpdateInfo info) {
@@ -315,10 +337,9 @@ class UpdateService {
       }
     }
     if (Platform.isAndroid) {
-      final result = await _androidChannel.invokeMethod<String>(
-        'installApk',
-        {'path': file.path},
-      );
+      final result = await _androidChannel.invokeMethod<String>('installApk', {
+        'path': file.path,
+      });
       if (result == 'permission') throw const UpdatePermissionRequired();
       return;
     }
@@ -328,15 +349,15 @@ class UpdateService {
   void _notice(String message) {
     final context = _navigatorKey?.currentContext;
     if (context == null) return;
-    ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-      SnackBar(content: Text(message)),
-    );
+    ScaffoldMessenger.maybeOf(context)
+        ?.showSnackBar(SnackBar(content: Text(message)));
   }
 }
 
 class _Asset {
-  const _Asset(this.name, this.url, this.size);
+  const _Asset(this.name, this.url, this.size, this.version);
   final String name;
   final String url;
   final int size;
+  final String version;
 }

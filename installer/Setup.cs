@@ -16,15 +16,15 @@ using Microsoft.Win32;
 [assembly: AssemblyProduct("ScaleGuard")]
 [assembly: AssemblyCompany("ScaleGuard")]
 [assembly: AssemblyDescription("Установщик ScaleGuard")]
-[assembly: AssemblyVersion("1.1.1.0")]
-[assembly: AssemblyFileVersion("1.1.1.0")]
-[assembly: AssemblyInformationalVersion("1.1.1")]
+[assembly: AssemblyVersion("1.1.2.0")]
+[assembly: AssemblyFileVersion("1.1.2.0")]
+[assembly: AssemblyInformationalVersion("1.1.2")]
 
 namespace ScaleGuardSetup
 {
     static class Const
     {
-        public const string Version = "1.1.1";
+        public const string Version = "1.1.2";
         public const string AppName = "ScaleGuard";
         public const string SiteUrl = "https://scaleguard.inzeworld.com";
         public const string PayloadRes = "ScaleGuardPayload";

@@ -1,25 +1,31 @@
 ﻿# Publishes a ScaleGuard release to GitHub.
 #
 #   $env:GITHUB_TOKEN = "<token with repo scope>"
-#   tool\release.ps1 -Version 1.1.1
+#   tool\release.ps1 -Version 1.1.2
 #
-# The updater in the app reads /releases/latest, so the release must be
-# published (not draft) and must contain the two assets it looks for:
-#   ScaleGuard-Setup-<version>.exe   (Windows, versioned copy)
-#   ScaleGuard-android.apk           (Android)
+# Asset names carry the platform's own version:
+#   ScaleGuard-Setup-<version>.exe
+#   ScaleGuard-android-<version>.apk
 #
-# The Windows installer is also uploaded under the stable name
-# `ScaleGuard-Setup.exe`. The website links to
-# /releases/latest/download/ScaleGuard-Setup.exe and
-# /releases/latest/download/ScaleGuard-android.apk, so both download buttons
-# start serving the new build as soon as the release is published - without a
-# website redeploy.
+# The app updater and the website read those names instead of relying on the
+# release tag. That makes a platform-only release safe: Windows can keep
+# `ScaleGuard-Setup-1.1.1.exe` while Android gets `ScaleGuard-android-1.1.2.apk`,
+# and neither platform is offered the other one's old build.
+#
+# Android-only example (tag v1.1.2, old Windows installer):
+#   tool\release.ps1 -Version 1.1.2 `
+#       -SetupPath build\dist\ScaleGuard-Setup-1.1.1.exe `
+#       -WindowsVersion 1.1.1
 #
 # Existing assets with the same names are replaced, which makes the script safe
 # to re-run after a rebuild.
 
 param(
     [Parameter(Mandatory = $true)][string]$Version,
+    [string]$WindowsVersion = '',
+    [string]$AndroidVersion = '',
+    [string]$SetupPath = '',
+    [string]$ApkPath = '',
     [string]$Repo = 'INZEWORLD/ScaleGuard',
     [string]$Notes = '',
     [string]$Token = $env:GITHUB_TOKEN
@@ -29,8 +35,23 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $dist = Join-Path $root 'build\dist'
 $tag = "v$Version"
-$setup = Join-Path $dist "ScaleGuard-Setup-$Version.exe"
-$apk = Join-Path $dist 'ScaleGuard-android.apk'
+
+if (-not $WindowsVersion) { $WindowsVersion = $Version }
+if (-not $AndroidVersion) { $AndroidVersion = $Version }
+
+$setup = if ($SetupPath) {
+    if ([IO.Path]::IsPathRooted($SetupPath)) { $SetupPath } else { Join-Path $root $SetupPath }
+} else {
+    Join-Path $dist "ScaleGuard-Setup-$WindowsVersion.exe"
+}
+$apk = if ($ApkPath) {
+    if ([IO.Path]::IsPathRooted($ApkPath)) { $ApkPath } else { Join-Path $root $ApkPath }
+} else {
+    Join-Path $dist 'ScaleGuard-android.apk'
+}
+
+$setupAsset = "ScaleGuard-Setup-$WindowsVersion.exe"
+$apkAsset = "ScaleGuard-android-$AndroidVersion.apk"
 
 if (-not $Token) { throw 'Set GITHUB_TOKEN or pass -Token.' }
 if (-not (Test-Path $setup)) { throw "Missing installer: $setup" }
@@ -78,8 +99,10 @@ if ($null -eq $release) {
     Write-Host "[release] created (id $($release.id))"
 }
 
-# Replace stale assets with the same names.
-$assetNames = @('ScaleGuard-android.apk', 'ScaleGuard-Setup.exe', "ScaleGuard-Setup-$Version.exe")
+# Replace stale assets with the same versioned names. Stable names from older
+# releases are deliberately left alone: they are still a useful fallback for
+# anyone holding an old direct link.
+$assetNames = @($setupAsset, $apkAsset)
 foreach ($asset in @($release.assets)) {
     if ($assetNames -contains $asset.name) {
         try {
@@ -98,14 +121,13 @@ function Upload-Asset($path, $name, $label) {
     Write-Host "[release] done: $($result.browser_download_url)"
 }
 
-Upload-Asset $setup "ScaleGuard-Setup-$Version.exe" 'Windows installer'
-# Stable name for the website: /releases/latest/download/ScaleGuard-Setup.exe
-Upload-Asset $setup 'ScaleGuard-Setup.exe' 'Windows installer (latest)'
-Upload-Asset $apk 'ScaleGuard-android.apk' 'Android APK'
+Upload-Asset $setup $setupAsset 'Windows installer'
+Upload-Asset $apk $apkAsset 'Android APK'
 
 $latest = Invoke-GitHub 'GET' "https://api.github.com/repos/$Repo/releases/latest" $null
 Write-Host ''
 Write-Host "[release] latest is now $($latest.tag_name)"
 Write-Host "[release] page: https://github.com/$Repo/releases/tag/$tag"
-Write-Host "[release] website Windows: https://github.com/$Repo/releases/latest/download/ScaleGuard-Setup.exe"
-Write-Host "[release] website Android: https://github.com/$Repo/releases/latest/download/ScaleGuard-android.apk"
+Write-Host "[release] Windows asset: $setupAsset"
+Write-Host "[release] Android asset: $apkAsset"
+Write-Host "[release] website resolves both from the latest release automatically."

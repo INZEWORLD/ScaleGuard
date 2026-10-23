@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -60,12 +61,12 @@ class AppState extends ChangeNotifier {
     required PaymentService payments,
     required NotificationService notifications,
     required VpnService vpn,
-  })  : _storage = storage,
-        _api = api,
-        _auth = auth,
-        _payments = payments,
-        _notifications = notifications,
-        _vpn = vpn;
+  }) : _storage = storage,
+       _api = api,
+       _auth = auth,
+       _payments = payments,
+       _notifications = notifications,
+       _vpn = vpn;
 
   final StorageService _storage;
   final ApiClient _api;
@@ -79,6 +80,12 @@ class AppState extends ChangeNotifier {
 
   bool bootstrapping = true;
   bool busy = false;
+
+  /// True when the dashboard was painted from the local profile cache.
+  ///
+  /// The splash screen uses this to disappear immediately on a warm return
+  /// instead of replaying its launch animation while the network catches up.
+  bool restoredCachedSession = false;
 
   /// True while the process is handing over to a restarted copy of itself.
   ///
@@ -104,6 +111,7 @@ class AppState extends ChangeNotifier {
   /// a background service. It is never readable through the public API, so the
   /// request is remembered once made, exactly like [backgroundBatteryAsked].
   bool backgroundBatteryUsageAsked = false;
+
   /// True when the last launch could not reach the backend at all.
   ///
   /// The window then shows the offline page instead of the sign-in screen: a
@@ -115,6 +123,7 @@ class AppState extends ChangeNotifier {
   /// battery state cannot be read back (see [StorageService]).
   bool yandexPending = false;
   bool telegramPending = false;
+
   /// The selected bottom-navigation slot.
   ///
   /// A [ValueNotifier] on purpose: all four tabs are mounted at once and every
@@ -159,7 +168,9 @@ class AppState extends ChangeNotifier {
     _messageTimer = null;
     if (_error == null && _info == null) return;
     _messageTimer = Timer(
-      _error != null ? const Duration(seconds: 14) : const Duration(seconds: 10),
+      _error != null
+          ? const Duration(seconds: 14)
+          : const Duration(seconds: 10),
       () {
         _messageTimer = null;
         if (_error == null && _info == null) return;
@@ -416,9 +427,24 @@ class AppState extends ChangeNotifier {
   Future<void> bootstrap() async {
     bootstrapping = true;
     offline = false;
+    restoredCachedSession = false;
     notifyListeners();
 
+    String? token;
     try {
+      token = await _storage.readToken();
+      if (token != null && token.isNotEmpty) {
+        _api.setToken(token);
+        // Android may have killed the UI process while the native VPN service
+        // stayed up. The cached profile is not authoritative — the refresh
+        // below replaces it — but it is enough to show the dashboard without
+        // another full splash-and-spinner launch.
+        await _restoreCachedProfile();
+        if (user != null) {
+          bootstrapping = false;
+          notifyListeners();
+        }
+      }
       loggingEnabled = await _storage.readLogging();
       await _initLogging();
       final savedTunnelMode = await _storage.readTunnelMode();
@@ -458,8 +484,8 @@ class AppState extends ChangeNotifier {
       autoConnectOnLaunch = await _storage.readAutoConnect();
       final previousSessionUp = await _storage.readSessionWasUp();
       backgroundBatteryAsked = await _storage.readBackgroundBatteryAsked();
-      backgroundBatteryUsageAsked =
-          await _storage.readBackgroundBatteryUsageAsked();
+      backgroundBatteryUsageAsked = await _storage
+          .readBackgroundBatteryUsageAsked();
       gameModeEnabled = await _storage.readGameMode();
       bypassDomains = await _storage.readBypassDomains() ?? '';
       // Russian services keep the user's own connection by default: the tunnel
@@ -503,7 +529,6 @@ class AppState extends ChangeNotifier {
       // unless the application claims it. Best effort: a failure only affects
       // that hand-off, never normal sign-in.
       await _ensureDesktopDeepLink();
-      final token = await _storage.readToken();
       if (token != null && token.isNotEmpty) {
         _api.setToken(token);
         if (online) await refreshProfile(silent: true);
@@ -534,7 +559,8 @@ class AppState extends ChangeNotifier {
           );
           unawaited(pingAllAndMaybeSelect());
         } else {
-          final willAutoConnect = autoConnectOnLaunch &&
+          final willAutoConnect =
+              autoConnectOnLaunch &&
               tunnel?.hasActiveSubscription == true &&
               _vpn.profiles.isNotEmpty;
           if (willAutoConnect) {
@@ -557,10 +583,7 @@ class AppState extends ChangeNotifier {
         if (tunnel?.hasActiveSubscription == true) {
           LogService.instance.log('app', 'resuming connect after the restart');
           unawaited(
-            Future<void>.delayed(
-              const Duration(milliseconds: 900),
-              toggleVpn,
-            ),
+            Future<void>.delayed(const Duration(milliseconds: 900), toggleVpn),
           );
         }
       }
@@ -579,6 +602,43 @@ class AppState extends ChangeNotifier {
   /// have seen had the network been there in the first place.
   Future<void> retryConnection() => bootstrap();
 
+  /// Restores the last profile snapshot from secure storage.
+  ///
+  /// A missing or unreadable cache is not an error: the normal network refresh
+  /// follows and fills the state from scratch.
+  Future<void> _restoreCachedProfile() async {
+    try {
+      final raw = await _storage.readProfileSnapshot();
+      if (raw == null || raw.isEmpty) return;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map<String, dynamic>) {
+        await _storage.clearProfileSnapshot();
+        return;
+      }
+      final snapshot = ProfileSnapshot.fromJson(decoded);
+      user = snapshot.user;
+      tunnel = snapshot.tunnel;
+      trial = snapshot.trial;
+      restoredCachedSession = true;
+    } catch (_) {
+      await _storage.clearProfileSnapshot();
+    }
+  }
+
+  Future<void> _saveCachedProfile() async {
+    if (user == null || tunnel == null || trial == null) return;
+    try {
+      await _storage.saveProfileSnapshot(
+        jsonEncode(
+          ProfileSnapshot(user: user!, tunnel: tunnel!, trial: trial!).toJson(),
+        ),
+      );
+    } catch (_) {
+      // The cache only makes the next launch faster; it must never fail a
+      // profile refresh.
+    }
+  }
+
   Future<void> _initLogging() async {
     String? primary;
     String? fallback;
@@ -587,19 +647,22 @@ class AppState extends ChangeNotifier {
       primary = '${exeDir}${Platform.pathSeparator}scaleguard_log.txt';
       final appData = Platform.environment['APPDATA'];
       if (appData != null && appData.isNotEmpty) {
-        fallback = '$appData${Platform.pathSeparator}ScaleGuard'
+        fallback =
+            '$appData${Platform.pathSeparator}ScaleGuard'
             '${Platform.pathSeparator}logs'
             '${Platform.pathSeparator}scaleguard_log.txt';
       }
     } else {
       try {
         final docs = await getApplicationDocumentsDirectory();
-        primary = '${docs.path}${Platform.pathSeparator}logs'
+        primary =
+            '${docs.path}${Platform.pathSeparator}logs'
             '${Platform.pathSeparator}scaleguard_log.txt';
       } catch (_) {
         primary = null;
       }
-      fallback = '${Directory.systemTemp.path}'
+      fallback =
+          '${Directory.systemTemp.path}'
           '${Platform.pathSeparator}scaleguard_log.txt';
     }
     if (primary == null) return;
@@ -669,10 +732,7 @@ class AppState extends ChangeNotifier {
     await _resolveDeviceIdentity();
     deviceLimitReached = false;
     try {
-      await _vpn.loadProfilesFromSubscription(
-        subscriptionUrl,
-        device: device,
-      );
+      await _vpn.loadProfilesFromSubscription(subscriptionUrl, device: device);
     } catch (error) {
       final message = _api.extractError(error);
       if (message.contains('404') || message.toLowerCase().contains('лимит')) {
@@ -771,6 +831,7 @@ class AppState extends ChangeNotifier {
       trial = profile.trial;
       error = null;
       offline = false;
+      await _saveCachedProfile();
 
       if (profile.tunnel.hasActiveSubscription &&
           profile.tunnel.subscriptionUrl.isNotEmpty) {
@@ -778,6 +839,11 @@ class AppState extends ChangeNotifier {
       }
       await _notifications.syncSubscriptionReminders(profile.tunnel);
     } catch (e) {
+      if (_api.isUnauthorized(e)) {
+        await logout();
+        error = 'Сессия истекла. Войдите снова.';
+        return;
+      }
       if (_api.isOfflineError(e)) offline = true;
       if (!silent) error = _api.extractError(e);
     } finally {
@@ -981,7 +1047,8 @@ class AppState extends ChangeNotifier {
         await launchUrl(uri, mode: LaunchMode.platformDefault);
       }
       yandexPending = true;
-      info = 'Откройте Яндекс и подтвердите вход. Затем вернитесь в ScaleGuard.';
+      info =
+          'Откройте Яндекс и подтвердите вход. Затем вернитесь в ScaleGuard.';
     } catch (e) {
       yandexPending = false;
       error = _api.extractError(e);
@@ -1005,7 +1072,8 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> handleOAuthDeepLink(Uri uri) async {
-    final token = uri.queryParameters['oauth_token'] ??
+    final token =
+        uri.queryParameters['oauth_token'] ??
         uri.queryParameters['token'] ??
         uri.queryParameters['auth_token'];
     if (token != null && token.length >= 20) {
@@ -1027,7 +1095,9 @@ class AppState extends ChangeNotifier {
         info = 'Вход выполнен';
       } else {
         await _storage.clearToken();
+        await _storage.clearProfileSnapshot();
         _api.setToken(null);
+        restoredCachedSession = false;
         error = 'Ссылка входа устарела. Войдите снова.';
         LogService.instance.log('auth', 'OAuth deep link was not accepted');
       }
@@ -1035,10 +1105,12 @@ class AppState extends ChangeNotifier {
       return;
     }
 
-    final oauthError = uri.queryParameters['oauth_error'] ?? uri.queryParameters['error'];
+    final oauthError =
+        uri.queryParameters['oauth_error'] ?? uri.queryParameters['error'];
     if (oauthError != null) {
       yandexPending = false;
-      error = uri.queryParameters['oauth_error_message'] ??
+      error =
+          uri.queryParameters['oauth_error_message'] ??
           uri.queryParameters['error_message'] ??
           'OAuth ошибка: $oauthError';
       notifyListeners();
@@ -1061,10 +1133,13 @@ class AppState extends ChangeNotifier {
       }
 
       _telegramPollTimer = Timer.periodic(
-        Duration(milliseconds: session.pollIntervalMs.clamp(1000, 5000).toInt()),
+        Duration(
+          milliseconds: session.pollIntervalMs.clamp(1000, 5000).toInt(),
+        ),
         (_) => _pollTelegramSession(),
       );
-      info = 'Откройте бота и подтвердите вход. Приложение само подхватит сессию.';
+      info =
+          'Откройте бота и подтвердите вход. Приложение само подхватит сессию.';
     } catch (e) {
       telegramPending = false;
       error = _api.extractError(e);
@@ -1407,12 +1482,16 @@ class AppState extends ChangeNotifier {
     );
     pendingTopUpPaymentId = session.paymentId;
     pendingTopUpPlanId = session.planId ?? planId;
-    await _storage.savePendingTopUp(paymentId: session.paymentId, planId: pendingTopUpPlanId);
+    await _storage.savePendingTopUp(
+      paymentId: session.paymentId,
+      planId: pendingTopUpPlanId,
+    );
     final uri = Uri.parse(session.paymentUrl);
     if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
       throw StateError('Не удалось открыть страницу оплаты');
     }
-    info = 'Оплатите $amountRub ₽ в открывшемся окне — тариф включится сам, '
+    info =
+        'Оплатите $amountRub ₽ в открывшемся окне — тариф включится сам, '
         'как только платёж пройдёт.';
     _armTopUpPolling();
   }
@@ -1451,7 +1530,8 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> confirmPendingTopUp({bool silent = false}) async {
-    final paymentId = pendingTopUpPaymentId ?? await _storage.readPendingTopUpPaymentId();
+    final paymentId =
+        pendingTopUpPaymentId ?? await _storage.readPendingTopUpPaymentId();
     if (paymentId == null || paymentId.isEmpty) {
       error = 'Нет ожидающего платежа';
       notifyListeners();
@@ -1468,7 +1548,8 @@ class AppState extends ChangeNotifier {
       if (!result.success) {
         // A silent poll that finds nothing yet is the normal case, not news.
         if (!silent) {
-          info = 'Платёж ещё не подтверждён. Подождите минуту и попробуйте снова.';
+          info =
+              'Платёж ещё не подтверждён. Подождите минуту и попробуйте снова.';
           notifyListeners();
         }
         return;
@@ -1487,7 +1568,9 @@ class AppState extends ChangeNotifier {
         return;
       }
 
-      info = planId == null ? 'Баланс пополнен' : 'Оплата прошла, тариф активирован';
+      info = planId == null
+          ? 'Баланс пополнен'
+          : 'Оплата прошла, тариф активирован';
       await refreshProfile(silent: true);
     } catch (e) {
       if (!silent) error = _api.extractError(e);
@@ -1695,13 +1778,13 @@ class AppState extends ChangeNotifier {
   ///
   /// The screen presents the two modes as one switch: on is the system proxy
   /// (no administrator rights), off is global TUN.
-  Future<void> setSystemProxyMode(bool enabled) => setTunnelMode(
-        enabled ? VpnTunnelMode.systemProxy : VpnTunnelMode.tun,
-      );
+  Future<void> setSystemProxyMode(bool enabled) =>
+      setTunnelMode(enabled ? VpnTunnelMode.systemProxy : VpnTunnelMode.tun);
 
   /// The preset the connection-mode picker highlights.
   TunnelPreset get tunnelPreset {
-    if (tunnelMode == VpnTunnelMode.systemProxy) return TunnelPreset.systemProxy;
+    if (tunnelMode == VpnTunnelMode.systemProxy)
+      return TunnelPreset.systemProxy;
     return ruDirectEnabled ? TunnelPreset.rules : TunnelPreset.fullTraffic;
   }
 
@@ -1839,7 +1922,8 @@ class AppState extends ChangeNotifier {
     runAsAdmin = previous;
     await _storage.saveRunAsAdmin(previous);
     restarting = false;
-    error = 'Не удалось перезапустить с правами администратора. '
+    error =
+        'Не удалось перезапустить с правами администратора. '
         'Запустите приложение вручную через «Запуск от имени администратора».';
     notifyListeners();
   }
@@ -1931,8 +2015,9 @@ class AppState extends ChangeNotifier {
     if (!Platform.isWindows) return;
     final corePath = _vpn.coreExecutablePath;
     if (corePath == null) return;
-    final report = await const BinaryIntegrity()
-        .verifyDirectory(File(corePath).parent);
+    final report = await const BinaryIntegrity().verifyDirectory(
+      File(corePath).parent,
+    );
     integrity = report;
     LogService.instance.log('app', 'integrity: ${report.summary}');
     notifyListeners();
@@ -2060,7 +2145,8 @@ class AppState extends ChangeNotifier {
     if (!elevated) {
       // Both directions need administrator rights, so this is one of the few
       // things that genuinely cannot be done from a plain session.
-      helperError = 'Нужны права администратора: перезапустите приложение '
+      helperError =
+          'Нужны права администратора: перезапустите приложение '
           'от имени администратора';
       notifyListeners();
       return;
@@ -2152,7 +2238,10 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  Future<void> pingAllAndMaybeSelect({bool applyAuto = false, void Function()? notify}) async {
+  Future<void> pingAllAndMaybeSelect({
+    bool applyAuto = false,
+    void Function()? notify,
+  }) async {
     if (autoSelectingServer) return;
     autoSelectingServer = true;
     notifyListeners();
@@ -2160,10 +2249,12 @@ class AppState extends ChangeNotifier {
       final wasConnected = _vpn.state == VpnConnectionState.connected;
       int prev = _vpn.selectedIndex;
       int selectedAfterPing = prev;
-      await _vpn.pingAllServersAndAutoSelect(onTick: () {
-        notifyListeners();
-        notify?.call();
-      });
+      await _vpn.pingAllServersAndAutoSelect(
+        onTick: () {
+          notifyListeners();
+          notify?.call();
+        },
+      );
       selectedAfterPing = _vpn.selectedIndex;
       notifyListeners();
       notify?.call();
@@ -2222,8 +2313,10 @@ class AppState extends ChangeNotifier {
     killSwitchActive = engaged;
     killSwitchError = engaged ? null : _killSwitch.lastError;
     if (!engaged && killSwitchError != null) {
-      LogService.instance
-          .log('app', 'kill switch could not be armed: $killSwitchError');
+      LogService.instance.log(
+        'app',
+        'kill switch could not be armed: $killSwitchError',
+      );
     }
     notifyListeners();
   }
@@ -2356,7 +2449,8 @@ class AppState extends ChangeNotifier {
     // does not match the digests recorded at build time is not started with
     // those rights. The system-proxy path stays available.
     if (tunnelNeedsElevation && integrity.isMismatch) {
-      error = '${integrity.summary}. Подключение в режиме TUN остановлено — '
+      error =
+          '${integrity.summary}. Подключение в режиме TUN остановлено — '
           'переустановите приложение.';
       notifyListeners();
       return;
@@ -2442,13 +2536,10 @@ class AppState extends ChangeNotifier {
   /// current instead of being read once per connect.
   void _startExternalIpRefresh() {
     _externalIpTimer?.cancel();
-    _externalIpTimer = Timer.periodic(
-      const Duration(minutes: 2),
-      (_) {
-        if (_vpn.state != VpnConnectionState.connected) return;
-        unawaited(refreshExternalIp());
-      },
-    );
+    _externalIpTimer = Timer.periodic(const Duration(minutes: 2), (_) {
+      if (_vpn.state != VpnConnectionState.connected) return;
+      unawaited(refreshExternalIp());
+    });
   }
 
   /// Everything that has to happen when a tunnel is taken down for good.
@@ -2522,13 +2613,16 @@ class AppState extends ChangeNotifier {
         await WindowsSingleInstanceGate.release();
         final started = await relaunchAsStandardUser();
         if (started) {
-          final replaced = await WindowsSingleInstanceGate
-              .isHeldByAnotherInstance(timeout: const Duration(seconds: 10));
+          final replaced =
+              await WindowsSingleInstanceGate.isHeldByAnotherInstance(
+                timeout: const Duration(seconds: 10),
+              );
           if (replaced) exit(0);
         }
         await WindowsSingleInstanceGate.reclaim();
         restarting = false;
-        error = 'Не удалось перезапустить без прав администратора. '
+        error =
+            'Не удалось перезапустить без прав администратора. '
             'Закройте приложение и запустите его обычным способом.';
         notifyListeners();
         return;
@@ -2568,7 +2662,9 @@ class AppState extends ChangeNotifier {
     await _teardownTunnel('logout');
     await _storage.saveSessionWasUp(false);
     await _storage.clearToken();
+    await _storage.clearProfileSnapshot();
     _api.setToken(null);
+    restoredCachedSession = false;
     user = null;
     tunnel = null;
     trial = null;

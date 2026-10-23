@@ -5,6 +5,7 @@ class StorageService {
 
   final FlutterSecureStorage _storage;
   static const _tokenKey = 'auth_token';
+  static const _profileCacheKey = 'profile_cache';
   static const _pendingTopUpKey = 'pending_topup_payment';
   static const _pendingTopUpPlanKey = 'pending_topup_plan';
   static const _themeKey = 'theme_mode';
@@ -161,7 +162,8 @@ class StorageService {
   Future<bool> readRuDirect() async =>
       await _storage.read(key: _ruDirectKey) != '0';
 
-  Future<void> saveThemeMode(String mode) => _storage.write(key: _themeKey, value: mode);
+  Future<void> saveThemeMode(String mode) =>
+      _storage.write(key: _themeKey, value: mode);
 
   Future<String?> readThemeMode() => _storage.read(key: _themeKey);
 
@@ -188,7 +190,22 @@ class StorageService {
 
   Future<void> clearToken() => _storage.delete(key: _tokenKey);
 
-  Future<void> savePendingTopUp({required String paymentId, int? planId}) async {
+  /// Last known profile, subscribed devices and traffic counters.
+  ///
+  /// Android can destroy the UI process while the VPN service keeps running.
+  /// Restoring this snapshot lets the next launch show the dashboard at once
+  /// instead of holding the splash screen until the network answers.
+  Future<String?> readProfileSnapshot() => _storage.read(key: _profileCacheKey);
+
+  Future<void> saveProfileSnapshot(String json) =>
+      _storage.write(key: _profileCacheKey, value: json);
+
+  Future<void> clearProfileSnapshot() => _storage.delete(key: _profileCacheKey);
+
+  Future<void> savePendingTopUp({
+    required String paymentId,
+    int? planId,
+  }) async {
     await _storage.write(key: _pendingTopUpKey, value: paymentId);
     if (planId != null) {
       await _storage.write(key: _pendingTopUpPlanKey, value: planId.toString());
@@ -197,12 +214,14 @@ class StorageService {
     }
   }
 
-  Future<String?> readPendingTopUpPaymentId() => _storage.read(key: _pendingTopUpKey);
+  Future<String?> readPendingTopUpPaymentId() =>
+      _storage.read(key: _pendingTopUpKey);
 
   Future<int?> readPendingTopUpPlanId() async {
     final raw = await _storage.read(key: _pendingTopUpPlanKey);
     return int.tryParse(raw ?? '');
   }
+
   Future<void> clearPendingTopUp() async {
     await _storage.delete(key: _pendingTopUpKey);
     await _storage.delete(key: _pendingTopUpPlanKey);

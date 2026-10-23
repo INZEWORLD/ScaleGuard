@@ -74,7 +74,10 @@ fun Service.buildServiceNotification(
         // about the state a background service exists to report.
         .apply { if (text.isNotBlank()) setContentText(text) }
         .setOngoing(true)
+        .setAutoCancel(false)
+        .setOnlyAlertOnce(true)
         .setPriority(androidx.core.app.NotificationCompat.PRIORITY_LOW)
+        .setForegroundServiceBehavior(androidx.core.app.NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
         .apply { if (contentIntent != null) setContentIntent(contentIntent) }
         .addAction(android.R.drawable.ic_media_pause, stopLabel, stopPending)
         .build()

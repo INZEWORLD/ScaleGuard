@@ -18,7 +18,8 @@ import '../config/app_config.dart';
 ///    on while [extractDiagnostics] keeps the original for the log.
 class ApiClient {
   ApiClient({String? token, Dio? dio}) {
-    _dio = dio ??
+    _dio =
+        dio ??
         Dio(
           BaseOptions(
             baseUrl: AppConfig.apiUrl,
@@ -47,7 +48,8 @@ class ApiClient {
             handler.next(error);
             return;
           }
-          final attempt = (error.requestOptions.extra['sg_attempt'] as int?) ?? 0;
+          final attempt =
+              (error.requestOptions.extra['sg_attempt'] as int?) ?? 0;
           if (attempt >= _maxRetries) {
             handler.next(error);
             return;
@@ -55,7 +57,9 @@ class ApiClient {
           error.requestOptions.extra['sg_attempt'] = attempt + 1;
           // Linear backoff: the failures this guards against are sub-second, so
           // waiting longer would only delay a successful login.
-          await Future<void>.delayed(Duration(milliseconds: 400 * (attempt + 1)));
+          await Future<void>.delayed(
+            Duration(milliseconds: 400 * (attempt + 1)),
+          );
           try {
             final response = await _dio.fetch<dynamic>(error.requestOptions);
             handler.resolve(response);
@@ -90,14 +94,13 @@ class ApiClient {
     String path, {
     Map<String, dynamic>? data,
     Duration? receiveTimeout,
-  }) =>
-      _dio.post<T>(
-        path,
-        data: data,
-        options: receiveTimeout == null
-            ? null
-            : Options(receiveTimeout: receiveTimeout),
-      );
+  }) => _dio.post<T>(
+    path,
+    data: data,
+    options: receiveTimeout == null
+        ? null
+        : Options(receiveTimeout: receiveTimeout),
+  );
 
   /// A network hiccup worth retrying.
   ///
@@ -144,6 +147,10 @@ class ApiClient {
     }
   }
 
+  /// Whether the server rejected the saved session.
+  bool isUnauthorized(Object error) =>
+      error is DioException && error.response?.statusCode == 401;
+
   /// Whether the request never reached the server at all.
   ///
   /// Used to tell "the internet is down" from "the server said no": only the
@@ -170,7 +177,8 @@ class ApiClient {
   }
 
   /// A message suitable for display.
-  String extractError(Object error) {    if (error is DioException) {
+  String extractError(Object error) {
+    if (error is DioException) {
       return _dioMessage(error);
     }
     if (error is StateError) return error.message;

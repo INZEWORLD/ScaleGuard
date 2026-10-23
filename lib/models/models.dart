@@ -41,6 +41,21 @@ class PublicUser {
   final int? subscriptionPlanId;
   final bool? autoRenewEnabled;
 
+  /// A small on-disk copy of the signed-in user, used to paint the main screen
+  /// immediately when Android recreates the process while the VPN is running.
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'email': email,
+    'name': name,
+    'balance': balance,
+    'role': role,
+    'has_tg': hasTg,
+    'has_yandex': hasYandex,
+    'telegram_id': telegramId,
+    'subscription_plan_id': subscriptionPlanId,
+    'autoRenewEnabled': autoRenewEnabled,
+  };
+
   factory PublicUser.fromJson(Map<String, dynamic> json) {
     return PublicUser(
       id: jsonInt(json['id']) ?? 0,
@@ -50,8 +65,12 @@ class PublicUser {
       role: jsonString(json['role'], 'user'),
       hasTg: json['has_tg'] == true,
       hasYandex: json['has_yandex'] == true,
-      telegramId: jsonInt(json['telegramId'] ?? json['telegram_id'] ?? json['tg_id']),
-      subscriptionPlanId: jsonInt(json['subscriptionPlanId'] ?? json['subscription_plan_id']),
+      telegramId: jsonInt(
+        json['telegramId'] ?? json['telegram_id'] ?? json['tg_id'],
+      ),
+      subscriptionPlanId: jsonInt(
+        json['subscriptionPlanId'] ?? json['subscription_plan_id'],
+      ),
       autoRenewEnabled: json['autoRenewEnabled'] as bool?,
     );
   }
@@ -76,6 +95,16 @@ class TunnelInfo {
   final String? username;
   final String? uuid;
 
+  Map<String, dynamic> toJson() => {
+    'status': status,
+    'subscriptionUrl': subscriptionUrl,
+    'expireAt': expireAt,
+    'trafficLimitBytes': trafficLimitBytes,
+    'userTraffic': {'usedTrafficBytes': usedTrafficBytes},
+    'username': username,
+    'uuid': uuid,
+  };
+
   bool get hasActiveSubscription {
     if (subscriptionUrl.trim().isEmpty) return false;
     final s = status.toUpperCase();
@@ -92,13 +121,23 @@ class TunnelInfo {
       return TunnelInfo(status: '', subscriptionUrl: '');
     }
     final trafficRaw = json['userTraffic'];
-    final traffic = trafficRaw is Map ? Map<String, dynamic>.from(trafficRaw) : null;
+    final traffic = trafficRaw is Map
+        ? Map<String, dynamic>.from(trafficRaw)
+        : null;
     return TunnelInfo(
       status: jsonString(json['status']),
-      subscriptionUrl: jsonString(json['subscriptionUrl'] ?? json['subscription_url']),
+      subscriptionUrl: jsonString(
+        json['subscriptionUrl'] ?? json['subscription_url'],
+      ),
       expireAt: json['expireAt']?.toString() ?? json['expire_at']?.toString(),
-      trafficLimitBytes: jsonNum(json['trafficLimitBytes'] ?? json['traffic_limit_bytes'], 0),
-      usedTrafficBytes: jsonNum(traffic?['usedTrafficBytes'] ?? traffic?['used_traffic_bytes'], 0),
+      trafficLimitBytes: jsonNum(
+        json['trafficLimitBytes'] ?? json['traffic_limit_bytes'],
+        0,
+      ),
+      usedTrafficBytes: jsonNum(
+        traffic?['usedTrafficBytes'] ?? traffic?['used_traffic_bytes'],
+        0,
+      ),
       username: json['username']?.toString(),
       uuid: json['uuid']?.toString(),
     );
@@ -117,6 +156,13 @@ class TrialInfo {
   final bool available;
   final bool activated;
   final int? durationDays;
+
+  Map<String, dynamic> toJson() => {
+    'enabled': enabled,
+    'available': available,
+    'activated': activated,
+    'durationDays': durationDays,
+  };
 
   factory TrialInfo.fromJson(Map<String, dynamic>? json) {
     if (json == null) {
@@ -209,6 +255,13 @@ class ProfileSnapshot {
   final TunnelInfo tunnel;
   final TrialInfo trial;
   final bool remnawaveSyncPending;
+
+  Map<String, dynamic> toJson() => {
+    'user': user.toJson(),
+    'tunnel': tunnel.toJson(),
+    'trial': trial.toJson(),
+    'remnawaveSyncPending': remnawaveSyncPending,
+  };
 
   factory ProfileSnapshot.fromJson(Map<String, dynamic> json) {
     return ProfileSnapshot(
@@ -361,11 +414,15 @@ class HwidDevice {
   factory HwidDevice.fromJson(Map<String, dynamic> json) {
     return HwidDevice(
       hwid: jsonString(json['hwid'] ?? json['id']),
-      deviceModel: json['deviceModel']?.toString() ?? json['device_model']?.toString(),
+      deviceModel:
+          json['deviceModel']?.toString() ?? json['device_model']?.toString(),
       platform: json['platform']?.toString(),
-      osVersion: json['osVersion']?.toString() ?? json['os_version']?.toString(),
-      userAgent: json['userAgent']?.toString() ?? json['user_agent']?.toString(),
-      createdAt: json['createdAt']?.toString() ?? json['created_at']?.toString(),
+      osVersion:
+          json['osVersion']?.toString() ?? json['os_version']?.toString(),
+      userAgent:
+          json['userAgent']?.toString() ?? json['user_agent']?.toString(),
+      createdAt:
+          json['createdAt']?.toString() ?? json['created_at']?.toString(),
     );
   }
 }
@@ -395,9 +452,9 @@ class HwidDevices {
       panelUsername: json['panelUsername']?.toString(),
       devices: raw is List
           ? raw
-              .whereType<Map>()
-              .map((e) => HwidDevice.fromJson(Map<String, dynamic>.from(e)))
-              .toList()
+                .whereType<Map>()
+                .map((e) => HwidDevice.fromJson(Map<String, dynamic>.from(e)))
+                .toList()
           : const <HwidDevice>[],
     );
   }
@@ -457,7 +514,10 @@ class PurchaseResult {
   final PublicUser? user;
   final InsufficientBalanceDetail? insufficientBalance;
 
-  factory PurchaseResult.fromJson(Map<String, dynamic> json, {required int statusCode}) {
+  factory PurchaseResult.fromJson(
+    Map<String, dynamic> json, {
+    required int statusCode,
+  }) {
     if (statusCode == 409 && json['code'] == 'INSUFFICIENT_BALANCE') {
       return PurchaseResult(
         success: false,
@@ -493,7 +553,10 @@ class InsufficientBalanceDetail {
   factory InsufficientBalanceDetail.fromJson(Map<String, dynamic> json) {
     final plan = json['plan'] as Map<String, dynamic>?;
     return InsufficientBalanceDetail(
-      planId: (plan?['id'] as num?)?.toInt() ?? (json['planId'] as num?)?.toInt() ?? 0,
+      planId:
+          (plan?['id'] as num?)?.toInt() ??
+          (json['planId'] as num?)?.toInt() ??
+          0,
       planTitle: (plan?['title'] as String?) ?? 'Тариф',
       planPrice: json['planPrice'] as num? ?? plan?['price'] as num? ?? 0,
       currentBalance: json['currentBalance'] as num? ?? 0,

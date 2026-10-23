@@ -10,7 +10,7 @@ $assets = Join-Path $installer 'assets'
 $distNew = Join-Path $root 'build\dist-new'
 $build = Join-Path $root 'build\installer'
 $out = Join-Path $root 'build\dist'
-$version = '1.1.1'
+$version = '1.1.2'
 $setupName = "ScaleGuard-Setup-$version.exe"
 
 New-Item -ItemType Directory -Force -Path $build, $out | Out-Null
