@@ -161,6 +161,23 @@ class UpdateDownloadService : Service() {
             return START_REDELIVER_INTENT
         }
 
+        val existing = apkPath?.let { File(it) }
+        if (state == STATE_DONE &&
+            version == nextVersion &&
+            existing != null &&
+            existing.exists() &&
+            existing.length() > 0L
+        ) {
+            // The APK is already here; keep the install notification instead of
+            // downloading the same 130 MB again after a dialog was dismissed.
+            postForeground(buildReadyNotification(existing))
+            handler.post {
+                stopForegroundCompat(detach = true)
+                stopSelf()
+            }
+            return START_NOT_STICKY
+        }
+
         downloadJob?.cancel()
         currentUrl = url
         version = nextVersion
