@@ -476,6 +476,13 @@ class _HomeBodyState extends State<_HomeBody> with WidgetsBindingObserver {
             child: Column(
               children: [
                 const SizedBox(height: 12),
+                if (state.offlineMode) ...[
+                  _OfflineModeBanner(
+                    busy: state.busy,
+                    onRetry: state.retryOfflineConnection,
+                  ),
+                  const SizedBox(height: 12),
+                ],
                 RepaintBoundary(
                   child: _VpnHero(
                     connected: connected,
@@ -790,6 +797,97 @@ class _HomeBodyState extends State<_HomeBody> with WidgetsBindingObserver {
             ),
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// Marks a dashboard that is running from the last downloaded subscription.
+///
+/// Without this line an offline session looks exactly like an online one until
+/// a purchase or a plan refresh fails. The check button retries only the
+/// account call, so a still-down backend does not cost the user the dashboard.
+class _OfflineModeBanner extends StatelessWidget {
+  const _OfflineModeBanner({required this.busy, required this.onRetry});
+
+  final bool busy;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SgColors.of(context);
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 12, 10, 8),
+      decoration: BoxDecoration(
+        color: SgColors.violet.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: SgColors.violet.withValues(alpha: 0.25),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Icon(
+                Icons.cloud_off_rounded,
+                size: 19,
+                color: SgColors.violet,
+              ),
+              const SizedBox(width: 9),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Офлайн-режим',
+                      style: TextStyle(
+                        color: SgColors.violet,
+                        fontSize: 13,
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Сервер аккаунта недоступен. Используются сохранённые '
+                      'серверы; тарифы и покупки временно не работают.',
+                      style: TextStyle(
+                        color: c.muted,
+                        fontSize: 11.5,
+                        height: 1.35,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          Align(
+            alignment: Alignment.centerRight,
+            child: TextButton.icon(
+              onPressed: busy ? null : onRetry,
+              style: TextButton.styleFrom(
+                foregroundColor: SgColors.violet,
+                visualDensity: VisualDensity.compact,
+              ),
+              icon: busy
+                  ? const SizedBox(
+                      width: 14,
+                      height: 14,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        valueColor: AlwaysStoppedAnimation<Color>(
+                          SgColors.violet,
+                        ),
+                      ),
+                    )
+                  : const Icon(Icons.refresh_rounded, size: 17),
+              label: Text(busy ? 'Проверяем…' : 'Проверить связь'),
+            ),
+          ),
+        ],
       ),
     );
   }

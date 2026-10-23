@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 int? jsonInt(dynamic value) {
   if (value == null) return null;
   if (value is int) return value;
@@ -307,6 +309,37 @@ class VpnServerProfile {
   final Map<String, dynamic> proxy;
 
   String get endpoint => server.isEmpty ? remark : '$server:$port';
+
+  /// Serialised form used by the offline connection cache.
+  ///
+  /// The proxy map is kept exactly as the subscription parser produced it:
+  /// re-parsing a stored share link would lose the Reality/Vision fields that
+  /// make some nodes work at all.
+  Map<String, dynamic> toJson() => {
+    'remark': remark,
+    'protocol': protocol,
+    'server': server,
+    'port': port,
+    'countryCode': countryCode,
+    'proxy': proxy,
+  };
+
+  factory VpnServerProfile.fromJson(Map<String, dynamic> json) {
+    final rawProxy = json['proxy'];
+    final proxy = rawProxy is Map
+        ? Map<String, dynamic>.from(rawProxy)
+        : <String, dynamic>{};
+    final remark = jsonString(json['remark']);
+    return VpnServerProfile(
+      remark: remark,
+      configJson: jsonString(json['configJson'], jsonEncode(proxy)),
+      protocol: jsonString(json['protocol']),
+      server: jsonString(json['server']),
+      port: jsonInt(json['port']) ?? 0,
+      countryCode: json['countryCode']?.toString(),
+      proxy: proxy,
+    );
+  }
 }
 
 class VpnPlan {

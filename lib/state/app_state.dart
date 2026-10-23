@@ -114,10 +114,32 @@ class AppState extends ChangeNotifier {
 
   /// True when the last launch could not reach the backend at all.
   ///
-  /// The window then shows the offline page instead of the sign-in screen: a
-  /// failed request is not a reason to ask for a password, and the retry
-  /// button is the only useful action while the network is down.
+  /// The window then shows the offline page instead of the dashboard. The page
+  /// offers a retry and, when a previous session is cached, the explicit
+  /// [offlineMode] escape hatch: the nodes themselves are independent of the
+  /// account API, so the tunnel can still come up while plans and purchases
+  /// stay unavailable.
   bool offline = false;
+
+  /// The user chose to continue with the cached subscription.
+  ///
+  /// This is deliberately separate from [offline]: the network can be down
+  /// without the user having accepted an offline session, and the cached data
+  /// must not be used until they ask for it. Once set, the dashboard stays up
+  /// and [retryOfflineConnection] can restore the online session without
+  /// replaying the splash screen.
+  bool offlineMode = false;
+
+  /// Whether the local snapshot has everything a tunnel needs.
+  ///
+  /// The account token is not enough on its own: the subscription has to be
+  /// active and the last successful subscription download must have left a
+  /// node list behind. Without both the offline page would only lead to an
+  /// empty location list.
+  bool get canUseOfflineMode =>
+      user != null &&
+      tunnel?.hasActiveSubscription == true &&
+      _vpn.profiles.isNotEmpty;
 
   /// Whether the Android background flow was completed on a vendor whose
   /// battery state cannot be read back (see [StorageService]).
@@ -440,6 +462,7 @@ class AppState extends ChangeNotifier {
         // below replaces it — but it is enough to show the dashboard without
         // another full splash-and-spinner launch.
         await _restoreCachedProfile();
+        await _restoreCachedConnection();
         if (user != null) {
           bootstrapping = false;
           notifyListeners();
@@ -561,6 +584,7 @@ class AppState extends ChangeNotifier {
         } else {
           final willAutoConnect =
               autoConnectOnLaunch &&
+              !offline &&
               tunnel?.hasActiveSubscription == true &&
               _vpn.profiles.isNotEmpty;
           if (willAutoConnect) {
@@ -597,10 +621,102 @@ class AppState extends ChangeNotifier {
 
   /// Runs the launch sequence again from the offline page.
   ///
-  /// The offline screen has one button and this is what it does: no token is
-  /// touched, so a successful retry lands on exactly the screen the user would
-  /// have seen had the network been there in the first place.
+  /// No token is touched, so a successful retry lands on exactly the screen the
+  /// user would have seen had the network been there in the first place.
   Future<void> retryConnection() => bootstrap();
+
+  /// Continues with the last downloaded subscription.
+  ///
+  /// The account API and the nodes are separate services: the API can be down
+  /// while the servers the subscription points at are still reachable. The node
+  /// definitions are normalised mihomo proxies, not links back to the API, so a
+  /// tunnel started from them needs no account request at all.
+  Future<bool> enterOfflineMode() async {
+    if (offlineMode) return true;
+    if (!canUseOfflineMode) {
+      // A bootstrap interrupted before the cache was read can still be rescued
+      // here; otherwise there is genuinely nothing to connect to.
+      await _restoreCachedProfile();
+      await _restoreCachedConnection();
+    }
+    if (!canUseOfflineMode) {
+      error =
+          'Нет сохранённых серверов для офлайн-режима. '
+          'Подключитесь к серверу ScaleGuard хотя бы один раз.';
+      notifyListeners();
+      return false;
+    }
+    offlineMode = true;
+    offline = true;
+    bootstrapping = false;
+    error = null;
+    info =
+        'Офлайн-режим: доступны сохранённые серверы. '
+        'Тарифы и покупки временно недоступны.';
+    try {
+      await _vpn.initialize();
+      attachVpnListener();
+      await _notifications.initialize();
+      final adopted = await _vpn.adoptRunningTunnel(mode: tunnelMode);
+      if (!adopted) {
+        unawaited(_vpn.warmUp());
+        unawaited(pingAllAndMaybeSelect());
+      }
+    } catch (e) {
+      LogService.instance.log('app', 'offline mode init failed: $e');
+    }
+    notifyListeners();
+    return true;
+  }
+
+  /// Tries to restore the account connection from the offline dashboard.
+  ///
+  /// Unlike [retryConnection] this does not replay the launch sequence: the
+  /// user is already looking at the cached dashboard, so a successful check
+  /// only has to refresh the profile and nodes in place. If the backend is
+  /// still down the offline session stays exactly as it was.
+  Future<void> retryOfflineConnection() async {
+    if (busy) return;
+    busy = true;
+    error = null;
+    info = 'Проверяем связь с сервером…';
+    notifyListeners();
+    try {
+      final online = await _api.hasNetwork();
+      if (!online) {
+        offline = true;
+        error = 'Сервер всё ещё недоступен. Продолжаем в офлайн-режиме.';
+        return;
+      }
+      final token = await _storage.readToken();
+      if (token == null || token.isEmpty) {
+        await logout();
+        return;
+      }
+      _api.setToken(token);
+      final refreshed = await refreshProfile(silent: true);
+      if (!refreshed) {
+        // An expired session calls logout(), which has already cleared the
+        // offline state and put the user in front of the sign-in form.
+        if (user == null) return;
+        offline = true;
+        error =
+            'Сервер ответил, но профиль не обновился. '
+            'Продолжаем в офлайн-режиме.';
+        return;
+      }
+      offline = false;
+      offlineMode = false;
+      info = 'Связь с сервером восстановлена.';
+    } catch (e) {
+      offline = true;
+      error = 'Сервер всё ещё недоступен. Продолжаем в офлайн-режиме.';
+      LogService.instance.log('app', 'offline retry failed: $e');
+    } finally {
+      busy = false;
+      notifyListeners();
+    }
+  }
 
   /// Restores the last profile snapshot from secure storage.
   ///
@@ -636,6 +752,70 @@ class AppState extends ChangeNotifier {
     } catch (_) {
       // The cache only makes the next launch faster; it must never fail a
       // profile refresh.
+    }
+  }
+
+  /// Restores the node list that the last successful subscription left behind.
+  ///
+  /// Kept separate from [ProfileSnapshot] because the node definitions are much
+  /// larger and contain the proxy credentials themselves. A missing cache is
+  /// normal on a fresh install; a corrupt one is discarded silently and the
+  /// next online refresh replaces it.
+  Future<void> _restoreCachedConnection() async {
+    try {
+      final raw = await _storage.readConnectionCache();
+      if (raw == null || raw.isEmpty) return;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) {
+        await _storage.clearConnectionCache();
+        return;
+      }
+      final rawProfiles = decoded['profiles'];
+      if (rawProfiles is! List) {
+        await _storage.clearConnectionCache();
+        return;
+      }
+      final profiles = <VpnServerProfile>[];
+      for (final item in rawProfiles) {
+        if (item is! Map) continue;
+        final profile = VpnServerProfile.fromJson(
+          Map<String, dynamic>.from(item),
+        );
+        if (profile.remark.isEmpty || profile.proxy.isEmpty) continue;
+        profiles.add(profile);
+      }
+      if (profiles.isEmpty) return;
+      _vpn.restoreProfiles(
+        profiles,
+        selectedRemark: decoded['selected']?.toString(),
+      );
+      LogService.instance.log(
+        'app',
+        'offline cache: restored ${profiles.length} servers',
+      );
+    } catch (_) {
+      await _storage.clearConnectionCache();
+    }
+  }
+
+  /// Persists the current node list for the next offline launch.
+  Future<void> _saveCachedConnection() async {
+    if (_vpn.profiles.isEmpty) return;
+    try {
+      final selected =
+          _vpn.selectedIndex >= 0 && _vpn.selectedIndex < _vpn.profiles.length
+          ? _vpn.profiles[_vpn.selectedIndex].remark
+          : null;
+      await _storage.saveConnectionCache(
+        jsonEncode({
+          'version': 1,
+          'savedAt': DateTime.now().toUtc().toIso8601String(),
+          'selected': selected,
+          'profiles': _vpn.profiles.map((profile) => profile.toJson()).toList(),
+        }),
+      );
+    } catch (_) {
+      // The cache is an optimisation; a failed write must not fail a refresh.
     }
   }
 
@@ -743,6 +923,7 @@ class AppState extends ChangeNotifier {
     // A profile that just arrived also tells us when the panel wants it checked
     // again, so the schedule is armed here rather than at startup.
     _armSubscriptionCheck();
+    await _saveCachedConnection();
   }
 
   /// How often the subscription is re-read when the panel does not say.
@@ -797,6 +978,7 @@ class AppState extends ChangeNotifier {
   /// a location stopped working. A running tunnel adopts the new list through
   /// the controller, so nothing is interrupted.
   Future<void> _refreshSubscription() async {
+    if (offlineMode) return;
     final url = tunnel?.subscriptionUrl ?? '';
     if (url.isEmpty) return;
     try {
@@ -819,7 +1001,7 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  Future<void> refreshProfile({bool silent = false}) async {
+  Future<bool> refreshProfile({bool silent = false}) async {
     if (!silent) {
       busy = true;
       notifyListeners();
@@ -838,14 +1020,21 @@ class AppState extends ChangeNotifier {
         await _loadSubscriptionProfile(profile.tunnel.subscriptionUrl);
       }
       await _notifications.syncSubscriptionReminders(profile.tunnel);
+      // A successful account refresh *and* subscription download is the only
+      // proof that the backend is fully back. Leaving offline mode on earlier
+      // would still throw the user to the offline page if the node list
+      // happened to fail after the profile call succeeded.
+      offlineMode = false;
+      return true;
     } catch (e) {
       if (_api.isUnauthorized(e)) {
         await logout();
         error = 'Сессия истекла. Войдите снова.';
-        return;
+        return false;
       }
       if (_api.isOfflineError(e)) offline = true;
       if (!silent) error = _api.extractError(e);
+      return false;
     } finally {
       if (!silent) {
         busy = false;
@@ -859,8 +1048,14 @@ class AppState extends ChangeNotifier {
   Future<void> _persistSession(String token, PublicUser nextUser) async {
     await _storage.saveToken(token);
     _api.setToken(token);
+    // A different sign-in must not inherit the previous account's node list:
+    // those proxies remain valid for that subscription even without an API
+    // round-trip, so keeping them would cross the account boundary.
+    await _storage.clearConnectionCache();
+    _vpn.clearProfiles();
     user = nextUser;
     offline = false;
+    offlineMode = false;
   }
 
   Future<bool> loginWithEmail(String email, String password) async {
@@ -1389,6 +1584,9 @@ class AppState extends ChangeNotifier {
       user = profile.user;
       tunnel = profile.tunnel;
       trial = profile.trial;
+      offline = false;
+      offlineMode = false;
+      await _saveCachedProfile();
       if (profile.tunnel.subscriptionUrl.isNotEmpty) {
         await _loadSubscriptionProfile(profile.tunnel.subscriptionUrl);
       }
@@ -1415,6 +1613,11 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> loadPlans() async {
+    if (offlineMode) {
+      plansLoading = false;
+      notifyListeners();
+      return;
+    }
     plansLoading = true;
     error = null;
     notifyListeners();
@@ -1593,6 +1796,10 @@ class AppState extends ChangeNotifier {
 
   /// Refreshes the devices bound to the subscription.
   Future<void> loadDevices({bool silent = false}) async {
+    if (offlineMode) {
+      devicesLoading = false;
+      return;
+    }
     if (!silent) {
       devicesLoading = true;
       devicesError = null;
@@ -2204,6 +2411,7 @@ class AppState extends ChangeNotifier {
   Future<void> selectServer(int index) async {
     await _vpn.selectServer(index);
     autoModeEnabled = _vpn.autoSelectEnabled;
+    unawaited(_saveCachedConnection());
     // The exit may be in another country now, so the address the card shows has
     // to be re-read rather than kept from the previous node.
     if (_vpn.state == VpnConnectionState.connected) {
@@ -2663,8 +2871,12 @@ class AppState extends ChangeNotifier {
     await _storage.saveSessionWasUp(false);
     await _storage.clearToken();
     await _storage.clearProfileSnapshot();
+    await _storage.clearConnectionCache();
     _api.setToken(null);
+    _vpn.clearProfiles();
     restoredCachedSession = false;
+    offline = false;
+    offlineMode = false;
     user = null;
     tunnel = null;
     trial = null;

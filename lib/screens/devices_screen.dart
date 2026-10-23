@@ -27,7 +27,8 @@ class _DevicesScreenState extends State<DevicesScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<AppState>().loadDevices();
+      final state = context.read<AppState>();
+      if (!state.offlineMode) state.loadDevices();
     });
   }
 
@@ -94,7 +95,9 @@ class _DevicesScreenState extends State<DevicesScreen> {
                       const Spacer(),
                       IconButton(
                         tooltip: 'Обновить',
-                        onPressed: state.busy ? null : () => state.loadDevices(),
+                        onPressed: state.busy || state.offlineMode
+                            ? null
+                            : () => state.loadDevices(),
                         icon: Icon(Icons.refresh_rounded, color: c.muted),
                       ),
                     ],
@@ -145,10 +148,13 @@ class _DevicesScreenState extends State<DevicesScreen> {
                             ),
                         ] else
                           _EmptyCard(
-                            text: state.devicesError ??
-                                'К подписке пока не привязано ни одного устройства. '
-                                    'Оно появится здесь, как только вы подключитесь '
-                                    'с новой машины.',
+                            text: state.offlineMode
+                                ? 'В офлайн-режиме список устройств недоступен. '
+                                      'Сохранённые серверы при этом работают.'
+                                : state.devicesError ??
+                                      'К подписке пока не привязано ни одного '
+                                          'устройства. Оно появится здесь, как '
+                                          'только вы подключитесь с новой машины.',
                           ),
                       ],
                       if (state.error != null) ...[

@@ -1,9 +1,21 @@
+import 'dart:io';
+
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:path_provider/path_provider.dart';
 
 class StorageService {
-  StorageService() : _storage = const FlutterSecureStorage();
+  StorageService({String? supportDirectory})
+    : _storage = const FlutterSecureStorage(),
+      _supportDirectory = supportDirectory;
 
   final FlutterSecureStorage _storage;
+
+  /// Lets a test point the node cache at a temporary directory.
+  ///
+  /// Production leaves this null and uses the platform's application support
+  /// directory, which is private to the app on Android and inside the signed-in
+  /// user's profile on Windows.
+  final String? _supportDirectory;
   static const _tokenKey = 'auth_token';
   static const _profileCacheKey = 'profile_cache';
   static const _pendingTopUpKey = 'pending_topup_payment';
@@ -201,6 +213,63 @@ class StorageService {
       _storage.write(key: _profileCacheKey, value: json);
 
   Future<void> clearProfileSnapshot() => _storage.delete(key: _profileCacheKey);
+
+  /// The last subscription node list, kept outside the secure vault.
+  ///
+  /// Windows Credential Manager limits one credential to a few kilobytes and a
+  /// subscription with many nodes is larger than that. The file lives in the
+  /// per-user application support directory: Android's copy is already private
+  /// to the application, and Windows keeps it inside the signed-in user's
+  /// profile. Only the node definitions are stored here; the account token and
+  /// profile snapshot stay in the secure vault.
+  static const _connectionCacheFileName = 'connection_cache.json';
+
+  Future<File> _connectionCacheFile() async {
+    final supportPath =
+        _supportDirectory ?? (await getApplicationSupportDirectory()).path;
+    final directory = Directory(
+      '$supportPath${Platform.pathSeparator}cache',
+    );
+    if (!await directory.exists()) {
+      await directory.create(recursive: true);
+    }
+    return File(
+      '${directory.path}${Platform.pathSeparator}$_connectionCacheFileName',
+    );
+  }
+
+  Future<String?> readConnectionCache() async {
+    try {
+      final file = await _connectionCacheFile();
+      if (!await file.exists()) return null;
+      final raw = await file.readAsString();
+      return raw.isEmpty ? null : raw;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> saveConnectionCache(String json) async {
+    try {
+      final file = await _connectionCacheFile();
+      final temporary = File('${file.path}.tmp');
+      await temporary.writeAsString(json, flush: true);
+      if (await file.exists()) await file.delete();
+      await temporary.rename(file.path);
+    } catch (_) {
+      // The cache only makes the next offline launch possible; it must never
+      // turn a successful subscription refresh into a failure.
+    }
+  }
+
+  Future<void> clearConnectionCache() async {
+    try {
+      final file = await _connectionCacheFile();
+      final temporary = File('${file.path}.tmp');
+      if (await file.exists()) await file.delete();
+      if (await temporary.exists()) await temporary.delete();
+    } catch (_) {}
+  }
 
   Future<void> savePendingTopUp({
     required String paymentId,

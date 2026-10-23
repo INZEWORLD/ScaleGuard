@@ -150,7 +150,7 @@ class _ScaleGuardAppState extends State<ScaleGuardApp>
     Widget screen;
     if (showSplash) {
       screen = const SplashScreen(key: ValueKey('splash'));
-    } else if (state.user == null && state.offline) {
+    } else if (state.offline && !state.offlineMode) {
       screen = const OfflineScreen(key: ValueKey('offline'));
     } else if (state.user == null) {
       screen = const AuthScreen(key: ValueKey('auth'));
@@ -343,6 +343,7 @@ class _RootFallback extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
+    if (state.offline && !state.offlineMode) return const OfflineScreen();
     return state.user == null ? const AuthScreen() : const MainShell();
   }
 }

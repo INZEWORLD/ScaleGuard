@@ -28,7 +28,8 @@ class _PlansScreenState extends State<PlansScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<AppState>().loadPlans();
+      final state = context.read<AppState>();
+      if (!state.offlineMode) state.loadPlans();
     });
   }
 
@@ -87,7 +88,9 @@ class _PlansScreenState extends State<PlansScreen> {
                       const Spacer(),
                       IconButton(
                         tooltip: 'Обновить',
-                        onPressed: state.busy ? null : () => state.loadPlans(),
+                        onPressed: state.busy || state.offlineMode
+                            ? null
+                            : () => state.loadPlans(),
                         icon: Icon(Icons.refresh_rounded, color: c.muted),
                       ),
                     ],
@@ -99,19 +102,22 @@ class _PlansScreenState extends State<PlansScreen> {
                     children: [
                       _BalanceCard(
                         balance: balance,
-                        onTopUp: state.busy ? null : () => _openTopUpSheet(null),
+                        onTopUp: state.busy || state.offlineMode
+                            ? null
+                            : () => _openTopUpSheet(null),
                       ),
                       if (subscription != null && subscription.hasActiveSubscription) ...[
                         const SizedBox(height: 12),
                         _SubscriptionCard(tunnel: subscription),
                       ],
-                      if (state.pendingTopUpPaymentId != null) ...[
+                      if (!state.offlineMode &&
+                          state.pendingTopUpPaymentId != null) ...[
                         const SizedBox(height: 12),
                         _PaymentPendingCard(
                           onCheck: state.busy ? null : () => state.confirmPendingTopUp(),
                           onCancel: state.busy ? null : state.cancelTopUpWait,
                         ),
-                      ] else if (trialAvailable) ...[
+                      ] else if (!state.offlineMode && trialAvailable) ...[
                         const SizedBox(height: 12),
                         _TrialCard(
                           days: state.trial?.durationDays,
@@ -119,35 +125,43 @@ class _PlansScreenState extends State<PlansScreen> {
                           onActivate: state.activateTrial,
                         ),
                       ],
-                      const SizedBox(height: 18),
-                      Text(
-                        'Подключить тариф',
-                        style: TextStyle(
-                          color: c.ink,
-                          fontSize: 17,
-                          fontWeight: FontWeight.w800,
+                      if (state.offlineMode) ...[
+                        const SizedBox(height: 18),
+                        _OfflinePlansNotice(
+                          busy: state.busy,
+                          onRetry: state.retryOfflineConnection,
                         ),
-                      ),
-                      const SizedBox(height: 10),
-                      if (state.plansLoading && plans.isEmpty)
-                        const Padding(
-                          padding: EdgeInsets.symmetric(vertical: 32),
-                          child: Center(child: CircularProgressIndicator()),
-                        )
-                      else
-                        ...plans.map(
-                          (plan) => _PlanCard(
-                            plan: plan,
-                            balance: balance,
-                            busy: state.busy,
-                            onBuy: () => state.purchasePlan(plan.id),
-                            onTopUp: () => _openTopUpSheet(
-                              plan.chargeRub > balance
-                                  ? (plan.chargeRub - balance).ceil()
-                                  : null,
-                            ),
+                      ] else ...[
+                        const SizedBox(height: 18),
+                        Text(
+                          'Подключить тариф',
+                          style: TextStyle(
+                            color: c.ink,
+                            fontSize: 17,
+                            fontWeight: FontWeight.w800,
                           ),
                         ),
+                        const SizedBox(height: 10),
+                        if (state.plansLoading && plans.isEmpty)
+                          const Padding(
+                            padding: EdgeInsets.symmetric(vertical: 32),
+                            child: Center(child: CircularProgressIndicator()),
+                          )
+                        else
+                          ...plans.map(
+                            (plan) => _PlanCard(
+                              plan: plan,
+                              balance: balance,
+                              busy: state.busy,
+                              onBuy: () => state.purchasePlan(plan.id),
+                              onTopUp: () => _openTopUpSheet(
+                                plan.chargeRub > balance
+                                    ? (plan.chargeRub - balance).ceil()
+                                    : null,
+                              ),
+                            ),
+                          ),
+                      ],
                       if (state.error != null) ...[
                         const SizedBox(height: 12),
                         _Message(text: state.error!, color: SgColors.red),
@@ -743,6 +757,87 @@ class _IconBox extends StatelessWidget {
         borderRadius: BorderRadius.circular(12),
       ),
       child: Icon(icon, color: color, size: 20),
+    );
+  }
+}
+
+/// What the tariffs page becomes when the account API is unreachable.
+///
+/// The plans are not cached — prices and payment providers change too often to
+/// pretend otherwise — so the page explains the gap and points back at the
+/// action that can close it instead of showing a blank list or a raw timeout.
+class _OfflinePlansNotice extends StatelessWidget {
+  const _OfflinePlansNotice({required this.busy, required this.onRetry});
+
+  final bool busy;
+  final VoidCallback onRetry;
+
+  @override
+  Widget build(BuildContext context) {
+    final c = SgColors.of(context);
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: SgColors.violet.withValues(alpha: 0.10),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(
+          color: SgColors.violet.withValues(alpha: 0.25),
+        ),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const _IconBox(icon: Icons.cloud_off_rounded, color: SgColors.violet),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Тарифы недоступны в офлайн-режиме',
+                  style: TextStyle(
+                    color: c.ink,
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Сохранённые серверы работают, но баланс, покупки и '
+                  'продление требуют связи с сервером аккаунта.',
+                  style: TextStyle(
+                    color: c.muted,
+                    fontSize: 12.5,
+                    height: 1.35,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                TextButton.icon(
+                  onPressed: busy ? null : onRetry,
+                  style: TextButton.styleFrom(
+                    foregroundColor: SgColors.violet,
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                  ),
+                  icon: busy
+                      ? const SizedBox(
+                          width: 14,
+                          height: 14,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            valueColor: AlwaysStoppedAnimation<Color>(
+                              SgColors.violet,
+                            ),
+                          ),
+                        )
+                      : const Icon(Icons.refresh_rounded, size: 17),
+                  label: Text(busy ? 'Проверяем…' : 'Проверить связь'),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

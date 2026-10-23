@@ -182,6 +182,33 @@ class VpnService {
   String? get lastError => _lastError;
   List<VpnServerProfile> get profiles => List.unmodifiable(_profiles);
   int get selectedIndex => _selectedIndex;
+
+  /// Puts a node list loaded from the offline cache back into service.
+  ///
+  /// The core has not started yet at this point, so there is nothing to push
+  /// into mihomo: the next connect builds its configuration from exactly the
+  /// same list a fresh subscription response would have produced.
+  void restoreProfiles(
+    List<VpnServerProfile> profiles, {
+    String? selectedRemark,
+  }) {
+    _profiles = List<VpnServerProfile>.of(profiles);
+    _serverLatencies
+      ..clear()
+      ..addAll(List<int?>.filled(_profiles.length, null));
+    final match = selectedRemark == null
+        ? -1
+        : _profiles.indexWhere((profile) => profile.remark == selectedRemark);
+    _selectedIndex = match >= 0 ? match : 0;
+  }
+
+  /// Drops the cached subscription together with the signed-in account.
+  void clearProfiles() {
+    _profiles = [];
+    _serverLatencies.clear();
+    _selectedIndex = 0;
+    _subscriptionMetadata = null;
+  }
   List<int?> get serverLatencies => List.unmodifiable(_serverLatencies);
   int get currentPingMs => _currentPingMs;
   int get downloadTotalBytes => _downloadTotalBytes;
